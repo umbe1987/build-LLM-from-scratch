@@ -158,3 +158,92 @@ sa_v2 = SelfAttention_v2(d_in, d_out)
 print(sa_v2(inputs))
 
 ## 3.5 Hiding future words with causal attention
+queries = sa_v2.W_query(inputs)
+keys = sa_v2.W_key(inputs)
+attn_scores = queries @ keys.T
+attn_weights = torch.softmax(attn_scores / keys.shape[-1]**0.5, dim=-1)
+print(attn_weights)
+
+# create a mask to set the values above the diagonal to zero
+context_length = attn_scores.shape[0]
+mask_simple = torch.tril(torch.ones(context_length, context_length))
+print(mask_simple)
+masked_simple = attn_weights*mask_simple
+print(masked_simple)
+
+# renormalize the attention weights to sum up to 1 in each row again
+row_sums = masked_simple.sum(dim=-1, keepdim=True)
+masked_simple_norm = masked_simple / row_sums
+print(masked_simple_norm)
+
+# NOTE: masking and normalizing a matrix weights that were calculcated using all tokens (even future ones) DOES NOT leak information,
+#       since softmax mathematically ensures that the effect of masked position is nullified.
+
+# optimize the attainment of the masked attention weight matrix by masking the attention scores with -∞ before applying softmax
+mask = torch.triu(torch.ones(context_length, context_length), diagonal=1)
+masked = attn_scores.masked_fill(mask.bool(), -torch.inf)
+attn_weights = torch.softmax(masked / keys.shape[-1]**0.5, dim=-1)
+print(attn_weights)
+
+## 3.5.2 Masking additional attention weights with dropout
+# dropout: Deep Learning technique to reduce overfitting by randomly ignore hidden layer units during training
+
+# toy example
+# when using a dropout of 0.5, half of the weights will be disabled. To compensate for this, the remaining half will be doubled.
+torch.manual_seed(123)
+dropout = torch.nn.Dropout(0.5)
+example = torch.ones(6, 6)
+dropout(example)
+
+# actual use case
+torch.manual_seed(123)
+print(dropout(attn_weights))
+
+## 3.5.3 Implementing a compact causal attention class
+# duplicate inputs to create example so we can test the new CausalAttention class will work with batches
+batch = torch.stack((inputs, inputs), dim=0)
+print(batch.shape)
+# torch.Size([2, 6, 3]) =  three-dimensional tensor consisting of two input texts with six tokens each, where each token is a three-dimensional embedding vector
+
+class CausalAttention(nn.Module):
+    def __init__(self, d_in, d_out, context_length,
+                 droupout, qkv_bias=False):
+        super().__init__()
+        self.d_out = d_out
+        self.W_query = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.W_key   = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.W_value = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.dropout = nn.Dropout(droupout)
+        self.register_buffer(
+            'mask',
+            torch.triu(torch.ones(context_length, context_length),
+                       diagonal=1)
+        )
+
+    def forward(self, x):
+        # batch, tokens, embedding vector
+        b, num_tokens, d_in = x.shape
+        keys = self.W_key(x)
+        queries = self.W_query(x)
+        values = self.W_value(x)
+
+        # transpose tokens and embedding vector, keep batch at the first position
+        attn_scores = queries @ keys.transpose(1,2)
+        attn_scores.masked_fill(
+            self.mask.bool()[:num_tokens, :num_tokens], -torch.inf
+        )
+        attn_weights = torch.softmax(
+            attn_scores / keys.shape[-1]**0.5, dim=-1
+        )
+        attn_weights = self.dropout(attn_weights)
+
+        context_vec = attn_weights @ values
+        return context_vec
+
+torch.manual_seed(123)
+context_length = batch.shape[1]
+ca = CausalAttention(d_in, d_out, context_length, 0.0)
+context_vecs = ca(batch)
+print("context_vecs.shape:", context_vecs.shape)
+
+## 3.6 Extending single-head attention to multi-head attention
