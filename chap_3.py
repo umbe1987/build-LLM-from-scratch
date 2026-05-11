@@ -317,7 +317,7 @@ class MultiHeadAttention(nn.Module):
         attn_scores = queries @ keys.transpose(2, 3)
         mask_bool = self.mask.bool()[:num_tokens, :num_tokens] # this truncates the mask to the number of tokens
 
-        attn_scores.masked_fill(mask_bool, -torch.inf) # fill the attention score using the mask
+        attn_scores.masked_fill_(mask_bool, -torch.inf) # fill the attention score using the mask
 
         attn_weights = torch.softmax(
             attn_scores / keys.shape[-1]**0.5, dim=-1
@@ -348,11 +348,11 @@ print("context_vecs.shape:", context_vecs.shape)
 # heads). Also ensure that you use the respective input and output embedding sizes
 # similar to GPT-2 (768 dimensions). Note that the smallest GPT-2 model supports a
 # context length of 1,024 tokens.
-torch.manual_seed(123)
-batch_size = batch.shape[0]
-context_length = 1024
-d_in = d_out = 768
-mha_ex3_3 = MultiHeadAttention(d_in, d_out, context_length, 0.0, num_heads=12)
-context_vecs = mha_ex3_3(batch)
-print(context_vecs)
-print("context_vecs.shape:", context_vecs.shape)
+# torch.manual_seed(123)
+# batch_size = batch.shape[0]
+# context_length = 1024
+# d_in = d_out = 768
+# mha_ex3_3 = MultiHeadAttention(d_in, d_out, context_length, 0.0, num_heads=12)
+# context_vecs = mha_ex3_3(batch)
+# print(context_vecs)
+# print("context_vecs.shape:", context_vecs.shape)
