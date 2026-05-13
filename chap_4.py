@@ -333,4 +333,42 @@ total_size_bytes = total_params * 4 # assuming float32
 total_size_mb = total_size_bytes / (1024 * 1024)
 print(f"Total size of the model: {total_size_mb:.2f} MB")
 
+## Exercise 4.2 Initializing larger GPT models
+# configuration of the GPT-2 XL model
+GPT_CONFIG_XL = {
+    "vocab_size" : 50257,    # vocabulary size
+    "context_length": 1024,  # Context length
+    "emb_dim": 1600,          # Embedding dimension
+    "n_heads": 25,           # Number of attention heads
+    "n_layers": 48,          # Number of layers
+    "drop_rate": 0.1,        # Dropout rate
+    "qkv_bias": False        # Query-Key-Value bias
+}
+
+torch.manual_seed(123)
+model = GPTModel(GPT_CONFIG_XL)
+
+out = model(batch)
+print("Input batch:\n", batch)
+print("\nOutput shape:", out.shape)
+print(out)
+
+# get total number of parameters in the model's parametre tensor
+total_params = sum(p.numel() for p in model.parameters())
+print(f"Total number of parameters: {total_params}")
+
+print("Token embedding layer shape:", model.tok_emb.weight.shape)
+print("Output layer shape:", model.out_head.weight.shape)
+
+total_params_gpt2 = (
+    total_params - sum(p.numel() for p in model.out_head.parameters())
+)
+print(f"Number of trainable parameters "
+      f"considering weight tying: {total_params_gpt2:,}")
+
+# compute memory requirements
+total_size_bytes = total_params * 4 # assuming float32
+total_size_mb = total_size_bytes / (1024 * 1024)
+print(f"Total size of the model: {total_size_mb:.2f} MB")
+
 ## 4.7 Generating text
