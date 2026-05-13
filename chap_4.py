@@ -334,41 +334,79 @@ total_size_mb = total_size_bytes / (1024 * 1024)
 print(f"Total size of the model: {total_size_mb:.2f} MB")
 
 ## Exercise 4.2 Initializing larger GPT models
-# configuration of the GPT-2 XL model
-GPT_CONFIG_XL = {
-    "vocab_size" : 50257,    # vocabulary size
-    "context_length": 1024,  # Context length
-    "emb_dim": 1600,          # Embedding dimension
-    "n_heads": 25,           # Number of attention heads
-    "n_layers": 48,          # Number of layers
-    "drop_rate": 0.1,        # Dropout rate
-    "qkv_bias": False        # Query-Key-Value bias
-}
+# # configuration of the GPT-2 XL model
+# GPT_CONFIG_XL = {
+#     "vocab_size" : 50257,    # vocabulary size
+#     "context_length": 1024,  # Context length
+#     "emb_dim": 1600,          # Embedding dimension
+#     "n_heads": 25,           # Number of attention heads
+#     "n_layers": 48,          # Number of layers
+#     "drop_rate": 0.1,        # Dropout rate
+#     "qkv_bias": False        # Query-Key-Value bias
+# }
 
-torch.manual_seed(123)
-model = GPTModel(GPT_CONFIG_XL)
+# torch.manual_seed(123)
+# model = GPTModel(GPT_CONFIG_XL)
 
-out = model(batch)
-print("Input batch:\n", batch)
-print("\nOutput shape:", out.shape)
-print(out)
+# out = model(batch)
+# print("Input batch:\n", batch)
+# print("\nOutput shape:", out.shape)
+# print(out)
 
-# get total number of parameters in the model's parametre tensor
-total_params = sum(p.numel() for p in model.parameters())
-print(f"Total number of parameters: {total_params}")
+# # get total number of parameters in the model's parametre tensor
+# total_params = sum(p.numel() for p in model.parameters())
+# print(f"Total number of parameters: {total_params}")
 
-print("Token embedding layer shape:", model.tok_emb.weight.shape)
-print("Output layer shape:", model.out_head.weight.shape)
+# print("Token embedding layer shape:", model.tok_emb.weight.shape)
+# print("Output layer shape:", model.out_head.weight.shape)
 
-total_params_gpt2 = (
-    total_params - sum(p.numel() for p in model.out_head.parameters())
-)
-print(f"Number of trainable parameters "
-      f"considering weight tying: {total_params_gpt2:,}")
+# total_params_gpt2 = (
+#     total_params - sum(p.numel() for p in model.out_head.parameters())
+# )
+# print(f"Number of trainable parameters "
+#       f"considering weight tying: {total_params_gpt2:,}")
 
-# compute memory requirements
-total_size_bytes = total_params * 4 # assuming float32
-total_size_mb = total_size_bytes / (1024 * 1024)
-print(f"Total size of the model: {total_size_mb:.2f} MB")
+# # compute memory requirements
+# total_size_bytes = total_params * 4 # assuming float32
+# total_size_mb = total_size_bytes / (1024 * 1024)
+# print(f"Total size of the model: {total_size_mb:.2f} MB")
 
 ## 4.7 Generating text
+# simple implementation of a generative loop for a LLM
+def generate_text_simple(model, idx,
+                         max_new_tokens, context_size):
+    for _ in range(max_new_tokens):
+        # this crops the context if it exceeds the suppoerted context_size
+        idx_cond = idx[:, -context_size:]
+        with torch.no_grad():
+            logits = model(idx_cond)
+
+        # focus on the last time step (batch, vocab_size)
+        logits = logits[:, -1, :] # original: (batch, n_token, vocab_size)
+        probas = torch.softmax(logits, dim=-1)
+        idx_next = torch.argmax(probas, dim=-1, keepdim=True)
+        # append sampled index to the running sequence
+        idx = torch.cat((idx, idx_next), dim=1)
+    
+    return idx
+
+start_context = "Hello, I am"
+encoded = tokenizer.encode(start_context)
+print("encoded:", encoded)
+encoded_tensor = torch.tensor(encoded).unsqueeze(0) # adds batch dimension
+print("encoded_tensor.shape:", encoded_tensor.shape)
+
+# .eval() mode disables random components like dropout
+model.eval()
+out = generate_text_simple(
+    model=model,
+    idx=encoded_tensor,
+    max_new_tokens=6,
+    context_size=GPT_CONFIG_124M["context_length"]
+)
+print("Output:", out)
+print("Output length:", len(out[0]))
+
+# convert token IDs back into text
+decoded_text = tokenizer.decode(out.squeeze(0).tolist())
+print(decoded_text) # the outcome is gibberish because WE HAVEN'T TRAINED THE MODEL YET! ;)
