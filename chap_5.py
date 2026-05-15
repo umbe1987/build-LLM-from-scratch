@@ -99,3 +99,93 @@ perplexity = torch.exp(loss)
 print(perplexity) # e.g. a value of 48 725 means that the model is usure about which among 48 725 to chose in the vocabulary as next token (which is bad)
 
 ## 5.1.3 Calculating the training and validation set losses
+# use "The Verdict" to compute the loss on the training and validation datasets
+file_path = "the-verdict.txt"
+with open(file_path, "r", encoding="utf-8") as file:
+    text_data = file.read()
+
+total_characters = len(text_data)
+total_tokens = len(tokenizer.encode(text_data))
+print("Characters:", total_characters)
+print("Tokens:", total_tokens)
+
+# split data into train and validation
+train_ratio = 0.90
+split_idx = int(train_ratio * len(text_data))
+train_data = text_data[:split_idx]
+val_data = text_data[split_idx:]
+
+# import the data loader from chapter 2
+from chap_2 import create_data_loader_v1
+torch.manual_seed(123)
+
+train_loader = create_data_loader_v1(
+    train_data,
+    batch_size=2,
+    max_length=GPT_CONFIG_124M["context_length"],
+    stride=GPT_CONFIG_124M["context_length"],
+    drop_last=True,
+    shuffle=True,
+    num_workers=0
+)
+val_loader = create_data_loader_v1(
+    val_data,
+    batch_size=2,
+    max_length=GPT_CONFIG_124M["context_length"],
+    stride=GPT_CONFIG_124M["context_length"],
+    drop_last=False,
+    shuffle=False,
+    num_workers=0
+)
+
+# check if the data were created correctly
+print("Train loader:")
+for x, y in train_loader:
+    print(x.shape, y.shape)
+
+print("\nValidation loader:")
+for x, y in val_loader:
+    print(x.shape, y.shape)
+
+# utility function to calculate the cross entropy loss returned by the loader for a single batch
+def calc_loss_batch(input_batch, target_batch, model, device):
+    input_batch = input_batch.to(device) # to transfer data to a GPU if available
+    target_batch = target_batch.to(device)
+    logits = model(input_batch)
+    loss = torch.nn.functional.cross_entropy(
+        logits.flatten(0, 1), target_batch.flatten()
+    )
+
+    return loss
+
+# function using calc_loss_batch to calculate the loss over all the batches
+def calc_loss_loader(data_loader, model, device, num_batches=None):
+    total_loss = 0.
+    if len(data_loader) == 0:
+        return float("nan")
+    elif num_batches is None:
+        num_batches = len(data_loader)
+    else:
+        num_batches = min(num_batches, len(data_loader))
+    for i, (input_batch, target_batch) in enumerate(data_loader):
+        if i < num_batches:
+            loss = calc_loss_batch(
+                input_batch, target_batch, model, device
+            )
+            total_loss += loss.item() # sums loss for each batch
+        else:
+            break
+    
+    return total_loss / num_batches # average the loss over all batches
+
+# apply the loss function to the training an validation loaders
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device) # use CUDA if available, or CPU otherwise
+with torch.no_grad(): # disable gradient since we are not trining yet
+    train_loss = calc_loss_loader(train_loader, model, device)
+    val_loss = calc_loss_loader(val_loader, model, device)
+
+print("Training loss:", train_loss)
+print("Validation loss:", val_loss)
+
+## 5.2 Training an LLM
