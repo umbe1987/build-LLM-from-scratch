@@ -266,7 +266,7 @@ num_epochs = 10
 train_losses, val_losses, tokens_seen = train_model_simple(
     model, train_loader, val_loader, optimizer, device,
     num_epochs=num_epochs, eval_freq=5, eval_iter=5,
-    start_context="Evrey effort moves you", tokenizer=tokenizer
+    start_context="Every effort moves you", tokenizer=tokenizer
 )
 
 # plot showing training and validation losses side by side
