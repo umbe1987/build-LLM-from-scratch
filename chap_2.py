@@ -52,7 +52,7 @@ class GPTDatasetV1(Dataset):
     def __getitem__(self, idx):
         return self.input_ids[idx], self.target_ids[idx]
 
-def create_data_loader_v1(txt, batch_size=4, max_length=256,
+def create_dataloader_v1(txt, batch_size=4, max_length=256,
                           stride=128, shuffle=True, drop_last=True,
                           num_workers=0):
     tokenizer = tiktoken.get_encoding("gpt2")
@@ -70,7 +70,7 @@ def create_data_loader_v1(txt, batch_size=4, max_length=256,
 with open("the-verdict.txt", "r", encoding="utf-8") as f:
     raw_text = f.read()
 
-dataloder = create_data_loader_v1(
+dataloder = create_dataloader_v1(
     raw_text, batch_size=1, max_length=4, stride=1, shuffle=False)
 data_iter = iter(dataloder)
 first_batch = next(data_iter)
@@ -79,7 +79,7 @@ print(first_batch)
 second_batch = next(data_iter)
 print(second_batch)
 
-dataloder = create_data_loader_v1(
+dataloder = create_dataloader_v1(
     raw_text, batch_size=8, max_length=4, stride=4,
     shuffle=False
 )
@@ -110,7 +110,7 @@ output_dim = 256
 token_embedding_layer = torch.nn.Embedding(vocab_size, output_dim)
 
 max_length = 4
-dataloder = create_data_loader_v1(
+dataloder = create_dataloader_v1(
     raw_text, batch_size=8, max_length=max_length,
     stride=max_length, shuffle=False
 )

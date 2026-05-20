@@ -116,10 +116,10 @@ train_data = text_data[:split_idx]
 val_data = text_data[split_idx:]
 
 # import the data loader from chapter 2
-from chap_2 import create_data_loader_v1
+from chap_2 import create_dataloader_v1
 torch.manual_seed(123)
 
-train_loader = create_data_loader_v1(
+train_loader = create_dataloader_v1(
     train_data,
     batch_size=2,
     max_length=GPT_CONFIG_124M["context_length"],
@@ -128,7 +128,7 @@ train_loader = create_data_loader_v1(
     shuffle=True,
     num_workers=0
 )
-val_loader = create_data_loader_v1(
+val_loader = create_dataloader_v1(
     val_data,
     batch_size=2,
     max_length=GPT_CONFIG_124M["context_length"],
