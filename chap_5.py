@@ -181,7 +181,7 @@ def calc_loss_loader(data_loader, model, device, num_batches=None):
 # apply the loss function to the training an validation loaders
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.to(device) # use CUDA if available, or CPU otherwise
-with torch.no_grad(): # disable gradient since we are not trining yet
+with torch.no_grad(): # disable gradient since we are not training yet
     train_loss = calc_loss_loader(train_loader, model, device)
     val_loss = calc_loss_loader(val_loader, model, device)
 
@@ -290,14 +290,18 @@ epochs_tensor = torch.linspace(0, num_epochs, len(train_losses))
 plot_losses(epochs_tensor, tokens_seen, train_losses, val_losses)
 
 ## 5.3 Decoding strategies to control randomness
-model.to("cpu")
+# NEW: use CPU here as inference is cheap with 
+# this model and to ensure readers get same results in the
+# remaining sections of this book
+inference_device = torch.device("cpu")
+model.to(inference_device)
 model.eval() # turns off random components such as dropout
 
 # plug the model instance into the generate_text_simple function to generate one token at a time
 tokenizer = tiktoken.get_encoding("gpt2")
 token_ids = generate_text_simple(
     model=model,
-    idx=text_to_token_ids("Every effort moves you", tokenizer),
+    idx=text_to_token_ids("Every effort moves you", tokenizer).to(inference_device),
     max_new_tokens=25,
     context_size=GPT_CONFIG_124M["context_length"]
 )
@@ -390,7 +394,7 @@ print(topk_probas)
 
 ## 5.3.3 Modifying the text generation function
 # combine temperature scaling and top-k sampling to create a new generate text function
-def generate(model, idx,max_new_tokens, context_size,
+def generate(model, idx, max_new_tokens, context_size,
              temperature=0.0, top_k=None, eos_id=None):
     for _ in range(max_new_tokens):
         idx_cond = idx[:, -context_size:]
@@ -420,10 +424,191 @@ def generate(model, idx,max_new_tokens, context_size,
 torch.manual_seed(123)
 token_ids = generate(
     model=model,
-    idx=text_to_token_ids("Every effort moves you", tokenizer),
+    idx=text_to_token_ids("Every effort moves you", tokenizer).to(inference_device),
     max_new_tokens=15,
     context_size=GPT_CONFIG_124M["context_length"],
     top_k=25,
     temperature=1.4
+)
+print("Output text:\n", token_ids_to_text(token_ids, tokenizer))
+
+## 5.4 Loading and saving model weights in PyTorch
+# save the current state of the model with a dictionary mapping each layer to its parameters
+torch.save(model.state_dict(), "model.pth") # 'model.pth' is the filename where the dict is saved
+
+# we ca now load the saved model weights into a new model instance like so
+model = GPTModel(GPT_CONFIG_124M)
+model.load_state_dict(torch.load("model.pth", map_location=device))
+# IMPORTANT: eval() prevents the use of dropout during inference to avoid losing information
+# dropouts was important during training t avoid overfitting
+model.eval()
+
+# this saves the model AND the optimizer state
+# (usefule since AdamW uses hisitorical data to adjust learning rates)
+torch.save({
+    "model_state_dict": model.state_dict(),
+    "optimizer_state_dict": optimizer.state_dict()
+    },
+    "model_and_optimizer.pth"
+)
+
+# then we can restore the model and the optimizer like so
+checkpoint = torch.load("model_and_optimizer.pth", map_location=device)
+model = GPTModel(GPT_CONFIG_124M)
+model.load_state_dict(checkpoint["model_state_dict"])
+optimizer = torch.optim.AdamW(model.parameters(), lr=5e-4, weight_decay=0.1)
+optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+model.train();
+
+## Exercise 5.4
+# Load the model and optimizer in a new Python session or 
+# Jupyter notebook file and continue pretraining it for one more epoch using the 
+# 'train_model_simple' function
+# train_losses, val_losses, tokens_seen = train_model_simple(
+#     model, train_loader, val_loader, optimizer, device,
+#     num_epochs=5, eval_freq=5, eval_iter=5,
+#     start_context="Every effort moves you", tokenizer=tokenizer
+# )
+
+## 5.5 Loading pretrained weights form OpenAI
+# load GPT-2 model architecture settings and weight parameters
+from gpt_download import download_and_load_gpt2
+
+settings, params = download_and_load_gpt2(
+    model_size="124M", models_dir="gpt2"
+)
+
+print("Settings:", settings)
+print("Parameter dicitonary keys:", params.keys())
+print(params["wte"])
+print("Token embedding weight tensor dimensions:", params["wte"].shape)
+
+# list the differences between the different GPT model sizes
+model_configs = {
+    "gpt2-small (124M)": {"emb_dim": 768, "n_layers": 12, "n_heads": 12},
+    "gpt2-medium (355M)": {"emb_dim": 1024, "n_layers": 24, "n_heads": 16},
+    "gpt2-large (774M)": {"emb_dim": 1280, "n_layers": 36, "n_heads": 20},
+    "gpt2-xl (1558M)": {"emb_dim": 1600, "n_layers": 48, "n_heads": 25}
+}
+
+# update GPT_CONFIG_124M with the corresponding settings of the smallest GPT model
+model_name = "gpt2-small (124M)"
+NEW_CONFIG = GPT_CONFIG_124M.copy()
+NEW_CONFIG.update(model_configs[model_name])
+# we also need to update other settings to match those provided bu OpenAI for consistency
+NEW_CONFIG.update({"context_length": 1024})
+NEW_CONFIG.update({"qkv_bias": True})
+
+# initialize a new GPTModel instance using these new config
+gpt = GPTModel(NEW_CONFIG)
+gpt.eval()
+
+# utility funciton to check the consistency between two tensor shapes and return the right one as trainable PyTorch parameter
+def assign(left, right):
+    if left.shape != right.shape:
+        raise ValueError(f"Shape mismatch. Left: {left.shape}, "
+                         "Right: {right.shape}"
+        )
+    
+    return torch.nn.Parameter(torch.tensor(right))
+
+# function to load weights into a GPTModel instance
+import numpy as np
+
+def load_weights_into_gpt(gpt, params):
+    gpt.pos_emb.weight = assign(gpt.pos_emb.weight, params['wpe'])
+    gpt.tok_emb.weight = assign(gpt.tok_emb.weight, params['wte'])
+
+    # iterate over each transformer block in the model
+    for b in range(len(params["blocks"])):
+        # np.split used to divide attention and bias weights into 3 equal parts for the q, k, v components
+        # attention weights
+        q_w, k_w, v_w = np.split(
+            (params["blocks"][b]["attn"]["c_attn"])["w"], 3, axis=-1)
+        gpt.trf_blocks[b].att.W_query.weight = assign(
+            gpt.trf_blocks[b].att.W_query.weight, q_w.T
+        )
+        gpt.trf_blocks[b].att.W_key.weight = assign(
+            gpt.trf_blocks[b].att.W_key.weight, k_w.T
+        )
+        gpt.trf_blocks[b].att.W_value.weight = assign(
+            gpt.trf_blocks[b].att.W_value.weight, v_w.T
+        )
+
+        # bias weights
+        q_b, k_b, v_b = np.split(
+            (params["blocks"][b]["attn"]["c_attn"])["b"], 3, axis=-1)
+        gpt.trf_blocks[b].att.W_query.bias = assign(
+            gpt.trf_blocks[b].att.W_query.bias, q_b
+        )
+        gpt.trf_blocks[b].att.W_key.bias = assign(
+            gpt.trf_blocks[b].att.W_key.bias, k_b
+        )
+        gpt.trf_blocks[b].att.W_value.bias = assign(
+            gpt.trf_blocks[b].att.W_value.bias, v_b
+        )
+
+        gpt.trf_blocks[b].att.out_proj.weight = assign(
+            gpt.trf_blocks[b].att.out_proj.weight,
+            params["blocks"][b]["attn"]["c_proj"]["w"].T
+        )
+        gpt.trf_blocks[b].att.out_proj.bias = assign(
+            gpt.trf_blocks[b].att.out_proj.bias,
+            params["blocks"][b]["attn"]["c_proj"]["b"]
+        )
+
+        gpt.trf_blocks[b].ff.layers[0].weight = assign(
+            gpt.trf_blocks[b].ff.layers[0].weight,
+            params["blocks"][b]["mlp"]["c_fc"]["w"].T
+        )
+        gpt.trf_blocks[b].ff.layers[0].bias = assign(
+            gpt.trf_blocks[b].ff.layers[0].bias,
+            params["blocks"][b]["mlp"]["c_fc"]["b"]
+        )
+        gpt.trf_blocks[b].ff.layers[2].weight = assign(
+            gpt.trf_blocks[b].ff.layers[2].weight,
+            params["blocks"][b]["mlp"]["c_proj"]["w"].T
+        )
+        gpt.trf_blocks[b].ff.layers[2].bias = assign(
+            gpt.trf_blocks[b].ff.layers[2].bias,
+            params["blocks"][b]["mlp"]["c_proj"]["b"]
+        )
+
+        gpt.trf_blocks[b].norm1.scale = assign(
+            gpt.trf_blocks[b].norm1.scale,
+            params["blocks"][b]["ln_1"]["g"]
+        )
+        gpt.trf_blocks[b].norm1.shift = assign(
+            gpt.trf_blocks[b].norm1.shift,
+            params["blocks"][b]["ln_1"]["b"]
+        )
+        gpt.trf_blocks[b].norm2.scale = assign(
+            gpt.trf_blocks[b].norm2.scale,
+            params["blocks"][b]["ln_2"]["g"]
+        )
+        gpt.trf_blocks[b].norm2.shift = assign(
+            gpt.trf_blocks[b].norm2.shift,
+            params["blocks"][b]["ln_2"]["b"]
+        )
+
+        # the original GPT-2 model by OpenAI reused the token embedding weights in the 
+        # output layer to reduce the total number of parameters, which is known as 'weight tying'
+        gpt.final_norm.scale = assign(gpt.final_norm.scale, params["g"])
+        gpt.final_norm.shift = assign(gpt.final_norm.shift, params["b"])
+        gpt.out_head.weight = assign(gpt.out_head.weight, params["wte"])
+
+# now we need to override the randomly initialized weights by loading the ones inside the params dictionary
+load_weights_into_gpt(gpt, params)
+gpt.to(device)
+
+# use the loaded model to generate new text with the generate function
+torch.manual_seed(123)
+token_ids = generate(
+    model=gpt,
+    idx=text_to_token_ids("Every effort moves you", tokenizer).to(device),
+    max_new_tokens=25,
+    context_size=NEW_CONFIG["context_length"],
+    top_k=50,
+    temperature=1.5
 )
 print("Output text:\n", token_ids_to_text(token_ids, tokenizer))
