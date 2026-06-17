@@ -103,7 +103,7 @@ class SpamDataset(Dataset):
             self.max_length = max_length
             # truncates sequences if they are longer than max_length
             self.encoded_texts = [
-                self.encoded_texts[:self.max_length]
+                encoded_text[:self.max_length]
                 for encoded_text in self.encoded_texts
             ]
 
