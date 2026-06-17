@@ -250,3 +250,152 @@ token_ids = generate_text_simple(
 print(token_ids_to_text(token_ids, tokenizer))
 
 ## 6.5 Adding a classification head
+# The model needs to predict either 'spam' or 'not spam'.
+# to do so the output layer should map to these two classes instead of the vocabulary of 50,257 tokens
+print(model)
+
+# we replace out_head with a new output layer that we will fine-tune
+# in LLMs, it is sufficient to fine-tune only layers near the output to adapt to new tasks
+# this makes them computationally more efficient to fine-tune compared to other models
+
+# freeze the the model (to make all layers nontrainable)
+for param in model.parameters():
+    param.requires_grad = False
+
+# add a classification layer (replacing the original output layer)
+torch.manual_seed(123)
+num_classes = 2
+model.out_head = torch.nn.Linear(
+    in_features=BASE_CONFIG["emb_dim"],
+    out_features=num_classes
+)
+
+# the new model has model.out_head's requires_grad set to True by default
+# making it the only layer that will be updated during training
+# HOWEVER, to further improve the predictive performance, it's good to train
+# the final transformer block and the final LayerNorm
+for param in model.trf_blocks[-1].parameters():
+    param.requires_grad = True
+for param in model.final_norm.parameters():
+    param.requires_grad = True
+
+# let's try to use the model with the same input text as before
+inputs = tokenizer.encode("Do you have time")
+inputs = torch.tensor(inputs).unsqueeze(0)
+print("Inputs:", inputs)
+print("Inputs dimensions:", inputs.shape)
+
+# pass encoded token IDs to the model
+with torch.no_grad():
+    outputs = model(inputs)
+print("Outputs:\n", outputs)
+print("Outputs dimensions:", outputs.shape) # the output's embedding is now 2 instead of 50,257
+
+# extract last output token from the output tensor
+print("Last output token:", outputs[:, -1, :])
+
+# for spam classification, we are only interested in the last token when fine-tuning
+# because it is the only one with an attention score to all (previous) tokens
+# In other words, the last token in a sequence accumulates the most information, with access to data from all previous tokens
+
+## 6.6 Calculating the classification loss and accuracy
+# obtain the class label for the last token
+probas = torch.softmax(outputs[:, -1, :], dim=-1)
+label = torch.argmax(probas)
+print("Class label:", label.item())
+
+# simplify the code removeing softmax (since the largest outputs directly correspond to the highest probability score)
+logits = outputs[:, -1, :]
+label = torch.argmax(logits)
+print("Class label:", label.item())
+
+# classification accuracy: apply argmax-based predicitons to all examples in the dataset
+# and calculcate proportion of correct predictions
+def calc_accuracy_loader(data_loader, model, device, num_batches=None):
+    model.eval()
+    correct_predictions, num_examples = 0, 0
+
+    if num_batches is None:
+        num_batches =  len(data_loader)
+    else:
+        num_batches = min(num_batches, len(data_loader))
+    for i, (input_batch, target_batch) in enumerate(data_loader):
+        if i < num_batches:
+            input_batch = input_batch.to(device)
+            target_batch = target_batch.to(device)
+
+            with torch.no_grad():
+                logits = model(input_batch)[:, -1, :] # logits of last output token
+            predicted_labels = torch.argmax(logits, dim=-1)
+
+            num_examples += predicted_labels.shape[0]
+            correct_predictions += (
+                (predicted_labels == target_batch).sum().item()
+            )
+
+        else:
+            break
+    return correct_predictions / num_examples
+
+# determine the accuracy across various datasets estimated from 10 batches (for efficiency)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+
+torch.manual_seed(123)
+train_accuracy = calc_accuracy_loader(
+    train_loader, model, device, num_batches=10
+)
+val_accuracy = calc_accuracy_loader(
+    val_loader, model, device, num_batches=10
+)
+test_accuracy = calc_accuracy_loader(
+    test_loader, model, device, num_batches=10
+)
+
+print(f"Training accuracy: {train_accuracy*100:.2f}%")
+print(f"Validation accuracy: {val_accuracy*100:.2f}%")
+print(f"Test accuracy: {test_accuracy*100:.2f}%")
+
+# The output is almost random (~50%) because the model is not fine-tuned yet
+# Use cross-entropy function as a proxy to classification accuracy (since this is not differentiable) as loss function
+# Modify calc_loss_batch so that only last token is optimized
+def calc_loss_batch(input_batch, target_batch, model, device):
+    input_batch = input_batch.to(device)
+    target_batch = target_batch.to(device)
+    logits = model(input_batch)[:, -1, :] # logits of last output token
+    loss = torch.nn.functional.cross_entropy(logits, target_batch)
+    
+    return loss
+
+# calc_loss_batch compute the loss for a single batch
+# for all batches in a data loader, we define calc_loss_loader
+def calc_loss_loader(data_loader, model, device, num_batches=None):
+    total_loss = 0.
+    if len(data_loader) == 0:
+        return float("nan")
+    elif num_batches is None:
+        num_batches = len(data_loader)
+    # ensure number of batches does not exceed batches in data loader
+    else:
+        num_batches = min(num_batches, len(data_loader))
+    for i, (input_batch, target_batch) in enumerate(data_loader):
+        if i < num_batches:
+            loss = calc_loss_batch(
+                input_batch, target_batch, model, device
+            )
+            total_loss += loss.item()
+        else:
+            break
+    return total_loss / num_batches
+
+# calculate initial loss for each dataset
+with torch.no_grad(): # disable gradient tracking for efficiency since we are not trianing yet
+    train_loss = calc_loss_loader(train_loader, model, device, num_batches=5)
+    val_loss = calc_loss_loader(val_loader, model, device, num_batches=5)
+    test_loss = calc_loss_loader(test_loader, model, device, num_batches=5)
+
+print(f"Training loss: {train_loss:.3f}")
+print(f"Validation loss: {val_loss:.3f}")
+print(f"Test loss: {test_loss:.3f}")
+
+## 6.7 Fine-tuning the model on supervised data
