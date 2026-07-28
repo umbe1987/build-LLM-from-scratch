@@ -337,3 +337,51 @@ response_text = generated_text[len(input_text):].strip()
 print(response_text)
 
 ## 7.6 Fine-tuning the LLM on instruction data
+# import loss calculation and training functions
+from chap_5 import (
+    calc_loss_loader,
+    train_model_simple
+)
+
+# calculate initial loss for training and validation sets before fine-tuning
+model.to(device)
+torch.manual_seed(123)
+
+with torch.no_grad():
+    train_loss = calc_loss_loader(
+        train_loader, model, device, num_batches=5
+    )
+    val_loss = calc_loss_loader(
+        val_loader, model, device, num_batches=5
+    )
+
+print("Training loss:", train_loss)
+print("Validation loss:", val_loss)
+
+# instruction fine-tuning the pretrained LLM
+import time
+
+start_time = time.time()
+torch.manual_seed(123)
+optimizer = torch.optim.AdamW(
+    model.parameters(), lr=0.00005, weight_decay=0.1
+)
+num_epochs = 2
+
+train_losses, val_losses, tokens_seen = train_model_simple(
+    model, train_loader, val_loader, optimizer, device,
+    num_epochs=num_epochs, eval_freq=5, eval_iter=5,
+    start_context=format_input(val_data[0]), tokenizer=tokenizer
+)
+
+end_time = time.time()
+execution_time_minutes = (end_time - start_time) / 60
+print(f"Training completed in {execution_time_minutes:.2f} minutes.")
+
+# examine the training and validation loss curves
+from chap_5 import plot_losses
+
+epochs_tensor = torch.linspace(0, num_epochs, len(train_losses))
+plot_losses(epochs_tensor, tokens_seen, train_losses, val_losses)
+
+## Extracting and saving responses
